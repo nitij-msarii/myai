@@ -727,262 +727,54 @@ def format_response_for_user(sql_result, query_language="english"):
         return format_general_results(results, query_language)
 
 def format_book_results(results, language="english"):
-    """Format book-related results with comprehensive field support and Arabic language"""
-    if language == "arabic":
-        response = f"تم العثور على {len(results)} كتاب/كتب:\n\n"
-
-        for i, book in enumerate(results, 1):
-            response += f"📚 **الكتاب {i}:**\n"
-
-            # Basic book info
-            if 'title' in book and book['title']:
-                response += f"   📖 العنوان: {sanitize_text(book['title'])}\n"
-
-            # Author information
-            if 'author_name' in book and book['author_name']:
-                response += f"   ✍️ المؤلف: {sanitize_text(book['author_name'])}\n"
-            elif 'name' in book and book['name']:  # Direct author name
-                response += f"   ✍️ المؤلف: {sanitize_text(book['name'])}\n"
-
-            # Publication details
-            if 'isbn' in book and book['isbn']:
-                response += f"   📋 ISBN: {book['isbn']}\n"
-            if 'publication_date' in book and book['publication_date']:
-                response += f"   📅 تاريخ النشر: {book['publication_date']}\n"
-            if 'edition_number' in book and book['edition_number']:
-                response += f"   📑 رقم الطبعة: {book['edition_number']}\n"
-
-            # Content details
-            if 'description' in book and book['description']:
-                desc = sanitize_text(book['description'])
-                if len(desc) > 150:
-                    desc = desc[:147] + "..."
-                response += f"   📝 الوصف: {desc}\n"
-
-            # Statistics
-            if 'pdf_page_count' in book and book['pdf_page_count']:
-                response += f"   📄 عدد الصفحات: {book['pdf_page_count']}\n"
-            if 'average_rating' in book and book['average_rating']:
-                response += f"   ⭐ التقييم: {book['average_rating']}/5\n"
-            if 'total_ratings' in book and book['total_ratings']:
-                response += f"   👥 عدد التقييمات: {book['total_ratings']}\n"
-            if 'download_count' in book and book['download_count']:
-                response += f"   📥 مرات التحميل: {book['download_count']}\n"
-            if 'bookmark_count' in book and book['bookmark_count']:
-                response += f"   🔖 المفضلة: {book['bookmark_count']}\n"
-
-            # Links
-            if 'msarii_link' in book:
-                response += f"   🔗 استكشف الكتاب: {book['msarii_link']}\n"
-            elif 'title' in book:
-                link = generate_msarii_link('book', book['title'])
-                response += f"   🔗 استكشف الكتاب: {link}\n"
-
-            if 'author_msarii_link' in book:
-                response += f"   👤 صفحة المؤلف: {book['author_msarii_link']}\n"
-
-            response += "\n"
-    else:
-        response = f"Found {len(results)} book(s):\n\n"
-
-        for i, book in enumerate(results, 1):
-            response += f"📚 **Book {i}:**\n"
-
-            # Basic book info
-            if 'title' in book and book['title']:
-                response += f"   📖 Title: {sanitize_text(book['title'])}\n"
-
-            # Author information
-            if 'author_name' in book and book['author_name']:
-                response += f"   ✍️ Author: {sanitize_text(book['author_name'])}\n"
-            elif 'name' in book and book['name']:  # Direct author name
-                response += f"   ✍️ Author: {sanitize_text(book['name'])}\n"
-
-            # Publication details
-            if 'isbn' in book and book['isbn']:
-                response += f"   📋 ISBN: {book['isbn']}\n"
-            if 'publication_date' in book and book['publication_date']:
-                response += f"   📅 Published: {book['publication_date']}\n"
-            if 'edition_number' in book and book['edition_number']:
-                response += f"   📑 Edition: {book['edition_number']}\n"
-
-            # Content details
-            if 'description' in book and book['description']:
-                desc = sanitize_text(book['description'])
-                if len(desc) > 150:
-                    desc = desc[:147] + "..."
-                response += f"   📝 Description: {desc}\n"
-
-            # Statistics
-            if 'pdf_page_count' in book and book['pdf_page_count']:
-                response += f"   📄 Pages: {book['pdf_page_count']}\n"
-            if 'average_rating' in book and book['average_rating']:
-                response += f"   ⭐ Rating: {book['average_rating']}/5\n"
-            if 'total_ratings' in book and book['total_ratings']:
-                response += f"   👥 Total Ratings: {book['total_ratings']}\n"
-            if 'download_count' in book and book['download_count']:
-                response += f"   📥 Downloads: {book['download_count']}\n"
-            if 'bookmark_count' in book and book['bookmark_count']:
-                response += f"   🔖 Bookmarks: {book['bookmark_count']}\n"
-
-            # Links
-            if 'msarii_link' in book:
-                response += f"   🔗 Explore Book: {book['msarii_link']}\n"
-            elif 'title' in book:
-                link = generate_msarii_link('book', book['title'])
-                response += f"   🔗 Explore Book: {link}\n"
-
-            if 'author_msarii_link' in book:
-                response += f"   👤 Author Page: {book['author_msarii_link']}\n"
-
-            response += "\n"
-
-    return response
+    # Concise: just a comma-separated list of book titles (and author if available)
+    if not results:
+        return "No books found."
+    lines = []
+    for book in results:
+        title = sanitize_text(book.get('title', ''))
+        author = sanitize_text(book.get('author_name', '') or book.get('name', ''))
+        if title and author:
+            lines.append(f"{title} (by {author})")
+        elif title:
+            lines.append(title)
+    return ", ".join(lines)
 
 def format_author_results(results, language="english"):
-    """Format author-related results with Arabic support"""
-    if language == "arabic":
-        response = f"تم العثور على {len(results)} مؤلف/مؤلفين:\n\n"
-
-        for i, author in enumerate(results, 1):
-            response += f"✍️ **المؤلف {i}:**\n"
-
-            if 'name' in author and author['name']:
-                response += f"   الاسم: {sanitize_text(author['name'])}\n"
-            if 'bio' in author and author['bio']:
-                response += f"   السيرة الذاتية: {sanitize_text(author['bio'])}\n"
-            if 'created_at' in author:
-                response += f"   تاريخ الإضافة: {author['created_at']}\n"
-
-            # Add msarii.com link
-            if 'msarii_link' in author:
-                response += f"   🔗 استكشف المزيد: {author['msarii_link']}\n"
-            elif 'name' in author:
-                link = generate_msarii_link('author', author['name'])
-                response += f"   🔗 استكشف المزيد: {link}\n"
-
-            response += "\n"
-    else:
-        response = f"Found {len(results)} author(s):\n\n"
-
-        for i, author in enumerate(results, 1):
-            response += f"✍️ **Author {i}:**\n"
-
-            if 'name' in author and author['name']:
-                response += f"   Name: {sanitize_text(author['name'])}\n"
-            if 'bio' in author and author['bio']:
-                response += f"   Biography: {sanitize_text(author['bio'])}\n"
-            if 'created_at' in author:
-                response += f"   Added: {author['created_at']}\n"
-
-            # Add msarii.com link
-            if 'msarii_link' in author:
-                response += f"   🔗 Explore more: {author['msarii_link']}\n"
-            elif 'name' in author:
-                link = generate_msarii_link('author', author['name'])
-                response += f"   🔗 Explore more: {link}\n"
-
-            response += "\n"
-
-    return response
+    # Concise: just a comma-separated list of author names
+    if not results:
+        return "No authors found."
+    names = []
+    for a in results:
+        name = sanitize_text(a.get('name', ''))
+        if name:
+            names.append(name)
+    return ", ".join(names)
 
 def format_course_results(results, language="english"):
-    """Format course-related results with Arabic support"""
-    if language == "arabic":
-        response = f"تم العثور على {len(results)} دورة/دورات:\n\n"
-
-        for i, course in enumerate(results, 1):
-            response += f"🎓 **الدورة {i}:**\n"
-
-            if 'title' in course and course['title']:
-                response += f"   العنوان: {sanitize_text(course['title'])}\n"
-            if 'description' in course and course['description']:
-                response += f"   الوصف: {sanitize_text(course['description'])}\n"
-            if 'instructor' in course and course['instructor']:
-                response += f"   المعلم: {sanitize_text(course['instructor'])}\n"
-            if 'duration' in course and course['duration']:
-                response += f"   المدة: {course['duration']}\n"
-            if 'level' in course and course['level']:
-                response += f"   المستوى: {course['level']}\n"
-
-            # Add msarii.com link
-            if 'msarii_link' in course:
-                response += f"   🔗 استكشف المزيد: {course['msarii_link']}\n"
-            elif 'title' in course:
-                link = generate_msarii_link('course', course['title'])
-                response += f"   🔗 استكشف المزيد: {link}\n"
-
-            response += "\n"
-    else:
-        response = f"Found {len(results)} course(s):\n\n"
-
-        for i, course in enumerate(results, 1):
-            response += f"🎓 **Course {i}:**\n"
-
-            if 'title' in course and course['title']:
-                response += f"   Title: {sanitize_text(course['title'])}\n"
-            if 'description' in course and course['description']:
-                response += f"   Description: {sanitize_text(course['description'])}\n"
-            if 'instructor' in course and course['instructor']:
-                response += f"   Instructor: {sanitize_text(course['instructor'])}\n"
-            if 'duration' in course and course['duration']:
-                response += f"   Duration: {course['duration']}\n"
-            if 'level' in course and course['level']:
-                response += f"   Level: {course['level']}\n"
-
-            # Add msarii.com link
-            if 'msarii_link' in course:
-                response += f"   🔗 Explore more: {course['msarii_link']}\n"
-            elif 'title' in course:
-                link = generate_msarii_link('course', course['title'])
-                response += f"   🔗 Explore more: {link}\n"
-
-            response += "\n"
-
-    return response
+    # Concise: comma-separated list of course titles (optionally instructor)
+    if not results:
+        return "No courses found."
+    lines = []
+    for c in results:
+        title = sanitize_text(c.get('title', ''))
+        instructor = sanitize_text(c.get('instructor', ''))
+        if title and instructor:
+            lines.append(f"{title} (by {instructor})")
+        elif title:
+            lines.append(title)
+    return ", ".join(lines)
 
 def format_general_results(results, language="english"):
-    """Format general results with Arabic support"""
-    if language == "arabic":
-        response = f"تم العثور على {len(results)} نتيجة/نتائج:\n\n"
-
-        for i, result in enumerate(results, 1):
-            response += f"📋 **النتيجة {i}:**\n"
-            for key, value in result.items():
-                if value is not None and key != 'msarii_link':
-                    # Translate common field names to Arabic
-                    field_translations = {
-                        'id': 'المعرف',
-                        'name': 'الاسم',
-                        'title': 'العنوان',
-                        'description': 'الوصف',
-                        'created_at': 'تاريخ الإنشاء',
-                        'updated_at': 'تاريخ التحديث'
-                    }
-                    field_name = field_translations.get(key, key.replace('_', ' '))
-                    response += f"   {field_name}: {sanitize_text(value)}\n"
-
-            # Add msarii link if available
-            if 'msarii_link' in result:
-                response += f"   🔗 استكشف المزيد: {result['msarii_link']}\n"
-
-            response += "\n"
-    else:
-        response = f"Found {len(results)} result(s):\n\n"
-
-        for i, result in enumerate(results, 1):
-            response += f"📋 **Result {i}:**\n"
-            for key, value in result.items():
-                if value is not None and key != 'msarii_link':
-                    response += f"   {key.replace('_', ' ').title()}: {sanitize_text(value)}\n"
-
-            # Add msarii link if available
-            if 'msarii_link' in result:
-                response += f"   🔗 Explore more: {result['msarii_link']}\n"
-
-            response += "\n"
-
-    return response
+    # Concise: prefer 'title' or 'name' fields; return comma-separated list
+    if not results:
+        return "No results found."
+    items = []
+    for r in results:
+        text = sanitize_text(r.get('title') or r.get('name') or '')
+        if text:
+            items.append(text)
+    return ", ".join(items)
 
 # Simple test view without AutoGen
 @method_decorator(csrf_exempt, name='dispatch')
@@ -1039,15 +831,27 @@ class SimpleQueryView(APIView):
                 if not tables:
                     tables = list(schema.keys())[:10] if schema else []
                 counts = count_rows_in_tables(tables)
+                # Concise count response for books
+                if entity_type == 'book':
+                    total = sum(int(i['count']) for i in counts if 'count' in i)
+                    response_text = f"📚 We currently have approximately {total} book(s) in the database."
+                    if query_language == "arabic":
+                        response_text = f"📚 لدينا حاليًا ما يقرب من {total} كتاب/كتب في قاعدة البيانات."
+                    return Response({
+                        "response": response_text,
+                        "success": True,
+                        "mode": "count",
+                        "tables_checked": tables
+                    }, status=status.HTTP_200_OK)
+                # Default for other entities
                 formatted = format_count_response(counts, query_language, entity_type)
-                # Add explanatory note for count mode
                 note = "شرح: تم تحديد الجداول ذات الصلة من المخطط ثم حساب عدد الصفوف لكل جدول." if query_language == 'arabic' else "Explanation: Relevant tables were selected from the schema and row counts computed per table."
                 combined = formatted + "\n\n" + note
                 return Response({
-                "response": combined,
-                "success": True,
-                "mode": "count",
-                "tables_checked": tables
+                    "response": combined,
+                    "success": True,
+                    "mode": "count",
+                    "tables_checked": tables
                 }, status=status.HTTP_200_OK)
 
             # Comprehensive SQL queries based on keywords that fetch all relevant fields
@@ -1149,9 +953,20 @@ def simple_ai_query(request):
             if not tables:
                 tables = list(schema.keys())[:10] if schema else []
             counts = count_rows_in_tables(tables)
-            formatted = format_count_response(counts, query_language, entity_type)
+            total = sum(int(i.get('count', 0)) for i in counts if 'count' in i)
+            if (entity_type or '').strip() == 'book':
+                msg = f"📚 We currently have approximately {total} book(s) in the database."
+                if query_language == 'arabic':
+                    msg = f"📚 لدينا حاليًا ما يقرب من {total} كتاب/كتب في قاعدة البيانات."
+            elif (entity_type or '').strip() == 'author':
+                msg = f"There are {total} author(s)."
+                if query_language == 'arabic':
+                    msg = f"يوجد {total} مؤلف."
+            else:
+                label = (entity_type or 'record') + '(s)'
+                msg = f"There are {total} {label}."
             return JsonResponse({
-                "response": formatted,
+                "response": msg,
                 "success": True,
                 "mode": "count",
                 "tables_checked": tables
@@ -1235,15 +1050,49 @@ class AIQueryView(APIView):
 
             # COUNT mode (deterministic, no LLM)
             if detect_count_intent(question):
+                q_lower = (question or '').lower()
+                # Special case: authors with no book
+                if (
+                    ("author" in q_lower or "مؤلف" in question)
+                    and ("no book" in q_lower or "without book" in q_lower or "ليس لديه كتاب" in question or "لا يملك كتاب" in question)
+                ):
+                    sql = (
+                        "SELECT COUNT(*) as count FROM library_authors a "
+                        "LEFT JOIN library_encyclopedia_book b ON a.id = b.author_id "
+                        "WHERE b.id IS NULL"
+                    )
+                    sql_result = execute_sql_directly(sql)
+                    count = sql_result.get("results", [{}])[0].get("count", 0)
+                    response_text = f"There are {count} author(s) with no book."
+                    if query_language == "arabic":
+                        response_text = f"يوجد {count} مؤلف ليس لديه كتاب."
+                    return Response({
+                        "response": response_text,
+                        "success": True,
+                        "mode": "count_no_book",
+                        "executed_sql": sql
+                    }, status=status.HTTP_200_OK)
+                # Default count mode (concise)
                 schema = get_relevant_schema()
                 entity_type = infer_entity_type(question)
                 tables = get_tables_for_type(schema, entity_type) if entity_type else []
                 if not tables:
                     tables = list(schema.keys())[:10] if schema else []
                 counts = count_rows_in_tables(tables)
-                formatted = format_count_response(counts, query_language, entity_type)
+                total = sum(int(i.get('count', 0)) for i in counts if 'count' in i)
+                if (entity_type or '').strip() == 'book':
+                    msg = f"📚 We currently have approximately {total} book(s) in the database."
+                    if query_language == 'arabic':
+                        msg = f"📚 لدينا حاليًا ما يقرب من {total} كتاب/كتب في قاعدة البيانات."
+                elif (entity_type or '').strip() == 'author':
+                    msg = f"There are {total} author(s)."
+                    if query_language == 'arabic':
+                        msg = f"يوجد {total} مؤلف."
+                else:
+                    label = (entity_type or 'record') + '(s)'
+                    msg = f"There are {total} {label}."
                 return Response({
-                    "response": formatted,
+                    "response": msg,
                     "success": True,
                     "mode": "count",
                     "tables_checked": tables
@@ -1264,29 +1113,112 @@ class AIQueryView(APIView):
 
             # If AutoGen isn't ready, fall back to direct SQL path
             if not (AUTOGEN_AVAILABLE and GROQ_API_KEY):
-                # Use dynamic schema-aware fallback for better accuracy
-                dynamic_sql = None
-                # Prefer pattern-based author detection (e.g., من هو ...)
-                if infer_entity_type_from_patterns(question) == 'author' or infer_entity_type(question) == 'author':
-                    dynamic_sql = build_dynamic_author_sql(schema, question)
-                elif ("book" in (question or "").lower()) or ("كتاب" in (question or "")):
-                    dynamic_sql = build_dynamic_book_sql(schema, question)
-                # Fallback heuristics if dynamic build not possible
-                if not dynamic_sql:
-                    if "book" in question.lower() or "كتاب" in question:
-                        if "encyclopedia of science" in question.lower() or "موسوعة العلوم" in question:
-                            dynamic_sql = (
-                                "SELECT eb.*, la.name as author_name, la.bio as author_bio, la.slug as author_slug "
-                                "FROM library_encyclopedia_book eb LEFT JOIN library_authors la ON eb.author_id = la.id "
-                                "WHERE eb.title LIKE '%Encyclopedia of Science%'"
-                            )
+                # Generalized intent detection and SQL routing
+                def detect_intent_and_generate_sql(question, schema):
+                    q = (question or '').lower()
+                    # Count authors with no books
+                    if ("author" in q or "مؤلف" in question) and ("no book" in q or "without book" in q or "ليس لديه كتاب" in question or "لا يملك كتاب" in question):
+                        return {
+                            'intent': 'count_authors_no_books',
+                            'sql': "SELECT COUNT(*) as count FROM library_authors a LEFT JOIN library_encyclopedia_book b ON a.id = b.author_id WHERE b.id IS NULL"
+                        }
+                    # Count authors with books
+                    if ("author" in q or "مؤلف" in question) and ("with book" in q or "has book" in q or "لديه كتاب" in question or "عنده كتاب" in question):
+                        return {
+                            'intent': 'count_authors_with_books',
+                            'sql': "SELECT COUNT(DISTINCT a.id) as count FROM library_authors a JOIN library_encyclopedia_book b ON a.id = b.author_id"
+                        }
+                    # Book name contains a letter
+                    if ("book" in q or "كتاب" in question) and ("name with" in q or "اسم يحتوي" in question or "with '" in q or "contains" in q):
+                        import re
+                        match = re.search(r"with '?([a-zA-Z])'?", q)
+                        letter = match.group(1) if match else 's'
+                        return {
+                            'intent': 'books_with_letter',
+                            'sql': f"SELECT * FROM library_encyclopedia_book WHERE title LIKE '%{letter}%' LIMIT 5"
+                        }
+                    # Is this book available
+                    if ("is" in q or "هل" in question) and ("book" in q or "كتاب" in question) and ("available" in q or "متوفر" in question):
+                        import re
+                        match = re.search(r"book (.*?) available", q)
+                        book_name = match.group(1).strip() if match else ''
+                        if book_name:
+                            return {
+                                'intent': 'book_availability',
+                                'sql': f"SELECT COUNT(*) as count FROM library_encyclopedia_book WHERE title LIKE '%{book_name}%'"
+                            }
                         else:
-                            dynamic_sql = (
-                                "SELECT eb.*, la.name as author_name, la.bio as author_bio, la.slug as author_slug "
-                                "FROM library_encyclopedia_book eb LEFT JOIN library_authors la ON eb.author_id = la.id "
-                                "LIMIT 3"
-                            )
-                    elif "author" in question.lower() or "مؤلف" in question:
+                            return {
+                                'intent': 'book_availability',
+                                'sql': "SELECT COUNT(*) as count FROM library_encyclopedia_book"
+                            }
+                    # Count books with genre filter (robust, partial/typo match)
+                    genre_match = re.search(r"based on ([\w\s]+)", q)
+                    if detect_count_intent(question) and ("book" in q or "كتاب" in question):
+                        genre = None
+                        if genre_match:
+                            genre = genre_match.group(1).strip()
+                        else:
+                            # Try to extract genre from question even with typos (e.g., entertain, entertainment, entertainmdnt)
+                            genre_search = re.search(r"entertain\w*", q)
+                            if genre_search:
+                                genre = genre_search.group(0)
+                        if genre:
+                            return {
+                                'intent': 'count_books_genre',
+                                'sql': f"SELECT COUNT(*) as count FROM library_encyclopedia_book WHERE genre LIKE '%{genre}%'"
+                            }
+                    # Count books
+                    if detect_count_intent(question) and ("book" in q or "كتاب" in question):
+                        return {
+                            'intent': 'count_books',
+                            'sql': "SELECT COUNT(*) as count FROM library_encyclopedia_book"
+                        }
+                    # Count authors
+                    if detect_count_intent(question) and ("author" in q or "مؤلف" in question):
+                        return {
+                            'intent': 'count_authors',
+                            'sql': "SELECT COUNT(*) as count FROM library_authors"
+                        }
+                    # List books
+                    if ("book" in q or "كتاب" in question) and ("list" in q or "show" in q or "عرض" in question or "قائمة" in question):
+                        return {
+                            'intent': 'list_books',
+                            'sql': "SELECT * FROM library_encyclopedia_book LIMIT 5"
+                        }
+                    # List authors
+                    if ("author" in q or "مؤلف" in question) and ("list" in q or "show" in q or "عرض" in question or "قائمة" in question):
+                        return {
+                            'intent': 'list_authors',
+                            'sql': "SELECT * FROM library_authors LIMIT 5"
+                        }
+                    # Fallback to dynamic author/book SQL
+                    if infer_entity_type_from_patterns(question) == 'author' or infer_entity_type(question) == 'author':
+                        return {
+                            'intent': 'author_search',
+                            'sql': build_dynamic_author_sql(schema, question)
+                        }
+                    if ("book" in q) or ("كتاب" in question):
+                        return {
+                            'intent': 'book_search',
+                            'sql': build_dynamic_book_sql(schema, question)
+                        }
+                    return {'intent': 'unknown', 'sql': None}
+
+                schema = get_relevant_schema()
+                intent_sql = detect_intent_and_generate_sql(question, schema)
+                dynamic_sql = intent_sql['sql']
+                intent = intent_sql['intent']
+
+                if not dynamic_sql:
+                    # Fallback heuristics if dynamic build not possible
+                    if "book" in (question or '').lower() or "كتاب" in question:
+                        dynamic_sql = (
+                            "SELECT eb.*, la.name as author_name, la.bio as author_bio, la.slug as author_slug "
+                            "FROM library_encyclopedia_book eb LEFT JOIN library_authors la ON eb.author_id = la.id "
+                            "LIMIT 3"
+                        )
+                    elif "author" in (question or '').lower() or "مؤلف" in question:
                         dynamic_sql = "SELECT * FROM library_authors LIMIT 5"
                     else:
                         dynamic_sql = (
@@ -1294,20 +1226,101 @@ class AIQueryView(APIView):
                             "FROM library_encyclopedia_book eb LEFT JOIN library_authors la ON eb.author_id = la.id "
                             "LIMIT 2"
                         )
+                    intent = 'fallback'
 
+                print(f"[DEBUG] Intent: {intent}, SQL: {dynamic_sql}")
                 sql_result = execute_sql_directly(dynamic_sql)
-                formatted_response = format_response_for_user(sql_result, query_language)
-                explanation = build_explanation_note(dynamic_sql, query_language)
-                combined = formatted_response + "\n\n" + explanation if formatted_response else explanation
 
-                return Response({
-                    "response": combined,
-                    "executed_sql": dynamic_sql,
-                    "success": sql_result.get("success", False),
-                    "result_count": sql_result.get("count", 0),
-                    "language": query_language,
-                    "note": "AutoGen disabled; used schema-aware fallback"
-                }, status=status.HTTP_200_OK)
+                # Response formatting based on intent
+                if intent == 'count_authors_no_books':
+                    count = sql_result.get("results", [{}])[0].get("count", 0)
+                    response_text = f"There are {count} author(s) with no book."
+                    if query_language == "arabic":
+                        response_text = f"يوجد {count} مؤلف ليس لديه كتاب."
+                    return Response({
+                        "response": response_text,
+                        "success": True,
+                        "mode": intent,
+                        "executed_sql": dynamic_sql
+                    }, status=status.HTTP_200_OK)
+                elif intent == 'count_authors_with_books':
+                    count = sql_result.get("results", [{}])[0].get("count", 0)
+                    response_text = f"There are {count} author(s) with at least one book."
+                    if query_language == "arabic":
+                        response_text = f"يوجد {count} مؤلف لديه كتاب واحد على الأقل."
+                    return Response({
+                        "response": response_text,
+                        "success": True,
+                        "mode": intent,
+                        "executed_sql": dynamic_sql
+                    }, status=status.HTTP_200_OK)
+                elif intent == 'books_with_letter':
+                    return Response({
+                        "response": format_response_for_user(sql_result, query_language),
+                        "success": sql_result.get("success", False),
+                        "mode": intent,
+                        "executed_sql": dynamic_sql
+                    }, status=status.HTTP_200_OK)
+                elif intent == 'book_availability':
+                    count = sql_result.get("results", [{}])[0].get("count", 0)
+                    available = count > 0
+                    response_text = "Yes, the book is available." if available else "No, the book is not available."
+                    if query_language == "arabic":
+                        response_text = "نعم، الكتاب متوفر." if available else "لا، الكتاب غير متوفر."
+                    return Response({
+                        "response": response_text,
+                        "success": True,
+                        "mode": intent,
+                        "executed_sql": dynamic_sql
+                    }, status=status.HTTP_200_OK)
+                elif intent == 'count_books_genre':
+                    count = sql_result.get("results", [{}])[0].get("count", 0)
+                    response_text = f"📚 We currently have approximately {count} book(s) in the database."
+                    if query_language == "arabic":
+                        response_text = f"📚 لدينا حاليًا ما يقرب من {count} كتاب/كتب في قاعدة البيانات."
+                    return Response({
+                        "response": response_text,
+                        "success": True,
+                        "mode": intent,
+                        "executed_sql": dynamic_sql
+                    }, status=status.HTTP_200_OK)
+                elif intent == 'count_books' or (intent == 'fallback' and 'book' in (question or '').lower()):
+                    count = sql_result.get("results", [{}])[0].get("count", 0)
+                    response_text = f"📚 We currently have approximately {count} book(s) in the database."
+                    if query_language == "arabic":
+                        response_text = f"📚 لدينا حاليًا ما يقرب من {count} كتاب/كتب في قاعدة البيانات."
+                    return Response({
+                        "response": response_text,
+                        "success": True,
+                        "mode": intent,
+                        "executed_sql": dynamic_sql
+                    }, status=status.HTTP_200_OK)
+                elif intent == 'count_authors':
+                    count = sql_result.get("results", [{}])[0].get("count", 0)
+                    response_text = f"There are {count} author(s)."
+                    if query_language == "arabic":
+                        response_text = f"يوجد {count} مؤلف."
+                    return Response({
+                        "response": response_text,
+                        "success": True,
+                        "mode": intent,
+                        "executed_sql": dynamic_sql
+                    }, status=status.HTTP_200_OK)
+                elif intent in ['list_books', 'list_authors', 'author_search', 'book_search', 'fallback']:
+                    return Response({
+                        "response": format_response_for_user(sql_result, query_language),
+                        "success": sql_result.get("success", False),
+                        "mode": intent,
+                        "executed_sql": dynamic_sql
+                    }, status=status.HTTP_200_OK)
+                else:
+                    # Unknown intent fallback
+                    return Response({
+                        "response": format_response_for_user(sql_result, query_language),
+                        "success": sql_result.get("success", False),
+                        "mode": intent,
+                        "executed_sql": dynamic_sql
+                    }, status=status.HTTP_200_OK)
 
             # Start interaction when AutoGen is available
             user_proxy.initiate_chat(sql_writer, message=prompt_template, callback=capture_callback)
@@ -1331,14 +1344,9 @@ class AIQueryView(APIView):
                 # Execute the SQL query directly
                 sql_result = execute_sql_directly(sql_query)
                 
-                # Format the response for the user with language support
                 formatted_response = format_response_for_user(sql_result, query_language)
-                # Append explanation note about SQL/tables used
-                explanation = build_explanation_note(sql_query, query_language)
-                combined = formatted_response + "\n\n" + explanation if formatted_response else explanation
-                
                 return Response({
-                "response": combined,
+                "response": formatted_response,
                 "raw_sql_response": content,
                 "executed_sql": sql_query,
                 "success": True,
