@@ -10,6 +10,7 @@ from django.utils.decorators import method_decorator
 import os
 import re
 import urllib.parse
+import html
 
 # Make AutoGen optional; always have a safe dummy agent available
 class _DummyAgent:
@@ -240,19 +241,9 @@ def get_relevant_schema():
 
             print(f"[DEBUG] Found tables: {existing_tables}")
 
-            # Focus on relevant tables for the AI agent
-            relevant_keywords = ['library', 'book', 'encyclopedia', 'author', 'user', 'course', 'article', 'company', 'webapp']
-            relevant_tables = []
-
-            for table in existing_tables:
-                table_lower = table.lower()
-                if any(keyword in table_lower for keyword in relevant_keywords):
-                    relevant_tables.append(table)
-
-            # Limit to avoid token limits but ensure we get the most important ones
-            relevant_tables = relevant_tables[:15]
-
-            print(f"[DEBUG] Using relevant tables: {relevant_tables}")
+            # Use ALL tables discovered in the database for the agent schema
+            relevant_tables = existing_tables
+            print(f"[DEBUG] Using all tables: {relevant_tables}")
 
             for table in relevant_tables:
                 try:
@@ -293,45 +284,22 @@ def generate_enhanced_prompt(schema, question):
     # Detect query language
     query_language = detect_language(question)
 
-    # Create a summary of available library tables
-    library_tables = []
-    for table_name, columns in schema.items():
-        if table_name.startswith('library_'):
-            library_tables.append(f"- {table_name}: {len(columns)} columns")
+    return f"""You are an expert multilingual database assistant. Your task is to read the user's question and generate ONE correct SQL query that answers it using ONLY the tables and columns listed in the schema below.
 
-    return f"""You are a multilingual database assistant specializing in library and book queries. Analyze this query and respond appropriately.
+USER QUESTION ({query_language}): {question}
 
-QUERY LANGUAGE: {query_language}
-USER QUESTION: {question}
-
-DATABASE SCHEMA:
+DATABASE SCHEMA (ALL TABLES AND COLUMNS):
 {json.dumps(schema, indent=2, ensure_ascii=False)}
 
-INSTRUCTIONS:
-1. Detect if query is in Arabic or English
-2. Use only existing tables from the schema above
-3. Primary library tables:
-   - library_encyclopedia_book (main books table with real data)
-   - library_authors (authors table with real data)
-   - library_books (additional books table)
-   - library_articles (articles table)
-   - library_categories (categories)
-   - library_webapps (web applications)
-   - library_company (companies)
-
-4. For book queries: Search library_encyclopedia_book and library_books tables, JOIN with library_authors
-5. For author queries: Search library_authors table
-6. For article queries: Search library_articles table
-7. For company queries: Search library_company table
-8. For webapp queries: Search library_webapps table
-9. Generate appropriate SQL query using execute_sql_api function
-10. Include ALL relevant columns in SELECT statements
-11. Use JOINs to get complete information (e.g., book with author details)
-
-Available library tables:
-{chr(10).join(library_tables) if library_tables else "No library tables found"}
-
-RESPOND IN THE SAME LANGUAGE AS THE QUERY."""
+STRICT INSTRUCTIONS:
+- Use ONLY tables and columns that appear in the schema above. Never invent columns.
+- Choose the most relevant table(s) based on the question (books, authors, articles, companies, webapps, categories, etc.).
+- Prefer JOINs when you need related information (e.g., book with author details).
+- If the question is about counts (how many/كم/عدد), generate a SELECT COUNT(*) query.
+- Limit result size appropriately (e.g., LIMIT 5) unless the question requests all.
+- Return the SQL using the execute_sql_api function with a brief reflection of your reasoning.
+- Respond in the same language as the question when describing your reasoning.
+"""
 
 def extract_sql_from_response(content):
     """Extract SQL query from the agent's response"""
@@ -401,6 +369,329 @@ def execute_sql_directly(sql_query):
             "sql_query": sql_query
         }
 
+# Deterministic COUNT intent utilities
+
+def clean_search_text(text: str) -> str:
+    t = (text or '')
+    # Remove Arabic question marks and punctuation
+    t = re.sub(r"[؟?\u061F\u060C,.;!]+", " ", t)
+    # Remove common phrases (Arabic/English) and generic tokens like 'كتاب'
+    removal = [
+        "من هو", "من هي", "who is", "what is", "هل لديك", "هل", "كتاب",
+        # English generic list phrasing
+        "any", "from db", "book name", "book names", "show", "list", "give me", "fetch"
+    ]
+    for phrase in removal:
+        t = re.sub(rf"\b{re.escape(phrase)}\b", " ", t, flags=re.IGNORECASE)
+    t = re.sub(r"\s+", " ", t).strip()
+    return t
+
+
+def extract_limit_from_question(text: str, default: int = 5) -> int:
+    try:
+        m = re.search(r"(\d+)", text or "")
+        if m:
+            n = int(m.group(1))
+            if n < 1:
+                return default
+            return min(n, 50)
+    except Exception:
+        pass
+    return default
+
+def detect_count_intent(question: str) -> bool:
+    q = (question or '')
+    ql = q.lower()
+    return ('how many' in ql or 'count' in ql or 'كم' in q or 'عدد' in q or 'كم عدد' in q)
+
+
+def infer_entity_type_from_patterns(question: str):
+    q = (question or '')
+    if re.search(r"^\s*من\s+(هو|هي)\s+", q):
+        return 'author'
+    return None
+
+
+def pick_table_by_keywords(schema: dict, keywords: List[str]):
+    if not schema:
+        return None
+    for table in schema.keys():
+        name = table.lower()
+        if any(kw in name for kw in keywords):
+            return table
+    return None
+
+
+def find_columns(schema: dict, table: str, substrings: List[str]):
+    cols = []
+    for col in schema.get(table, []):
+        cname = col.get('name') or ''
+        if any(s in cname.lower() for s in substrings):
+            cols.append(cname)
+    return cols
+
+
+def build_dynamic_author_sql(schema: dict, question: str):
+    # Choose author-like table
+    table = pick_table_by_keywords(schema, ['author'])
+    if not table:
+        return None
+    # Determine name-like columns
+    name_cols = find_columns(schema, table, ['name', 'slug']) or ['name']
+    qtext = clean_search_text(question)
+    if not qtext:
+        return None
+    # Build WHERE with OR across name-like columns
+    conditions = [f"{table}.{c} LIKE '%{qtext}%'" for c in name_cols]
+    where = " OR ".join(conditions)
+    sql = f"SELECT {table}.* FROM {table} WHERE {where} LIMIT 5"
+    return sql
+
+
+def has_column(schema: dict, table: str, col: str) -> bool:
+    for c in schema.get(table, []):
+        if (c.get('name') or '').lower() == col.lower():
+            return True
+    return False
+
+
+def pick_author_table(schema: dict):
+    return pick_table_by_keywords(schema, ['author'])
+
+
+def pick_primary_book_table(schema: dict):
+    preferred = ['library_books', 'library_encyclopedia_book', 'library_books_encyclopedia']
+    for p in preferred:
+        if p in schema:
+            return p
+    # Choose any 'book' table excluding auxiliary fragments
+    exclude_fragments = ['bookmark', 'history', 'review', 'reviews', 'category', 'addition', 'webapp', 'website', 'schedule']
+    for table in schema.keys():
+        name = table.lower()
+        if ('book' in name or 'books' in name) and not any(ex in name for ex in exclude_fragments):
+            return table
+    return None
+
+
+def build_dynamic_book_sql(schema: dict, question: str):
+    table = pick_primary_book_table(schema)
+    if not table:
+        return None
+    title_cols = find_columns(schema, table, ['title_ar', 'title', 'name']) or ['title']
+    qtext = clean_search_text(question)
+
+    # Extract requested limit (defaults to 5)
+    limit_n = extract_limit_from_question(question, 5)
+
+    # If query looks like a generic list request (no specific title tokens), return LIMIT only
+    generic_list = (not qtext) or (len(qtext) < 3)
+    list_markers = ["any", "show", "list", "give me", "fetch"]
+    if any(marker in (question or '').lower() for marker in list_markers):
+        generic_list = True
+
+    # Try to join author if available
+    a_table = pick_author_table(schema)
+    a_name_cols = find_columns(schema, a_table, ['name']) if a_table else []
+    join_clause = ""
+    author_select = ""
+    if has_column(schema, table, 'author_id') and a_table and a_name_cols:
+        a_name = a_name_cols[0]
+        join_clause = f" LEFT JOIN {a_table} ON {table}.author_id = {a_table}.id"
+        author_select = f", {a_table}.{a_name} as author_name"
+
+    if generic_list:
+        return f"SELECT {table}.*{author_select} FROM {table}{join_clause} LIMIT {limit_n}"
+
+    # Otherwise, build WHERE with OR across title-like columns
+    conditions = [f"{table}.{c} LIKE '%{qtext}%'" for c in title_cols]
+    where = " OR ".join(conditions)
+    return f"SELECT {table}.*{author_select} FROM {table}{join_clause} WHERE {where} LIMIT {limit_n}"
+
+
+def infer_entity_type(question: str):
+    q = (question or '')
+    mapping = {
+        'book': ['كتاب', 'كتب', 'book', 'books'],
+        'author': ['مؤلف', 'كاتب', 'عالم', 'author', 'authors'],
+        'article': ['مقال', 'مقالات', 'article', 'articles'],
+        'category': ['فئة', 'تصنيف', 'نوع', 'category', 'categories'],
+        'company': ['شركة', 'شركات', 'company', 'companies'],
+        'webapp': ['تطبيق', 'تطبيقات', 'برنامج', 'برامج', 'webapp', 'webapps'],
+    }
+    for t, kws in mapping.items():
+        for kw in kws:
+            if kw in q:
+                return t
+    return None
+
+
+def get_tables_for_type(schema: dict, entity_type: str):
+    if not schema or not entity_type:
+        return []
+    keyword_map = {
+        'book': ['book', 'books', 'encyclopedia'],
+        'author': ['author', 'authors'],
+        'article': ['article', 'articles'],
+        'category': ['category', 'categories'],
+        'company': ['company'],
+        'webapp': ['webapp', 'webapps'],
+    }
+    keywords = keyword_map.get(entity_type, [])
+    tables = []
+    for table in schema.keys():
+        name = table.lower()
+        if any(kw in name for kw in keywords):
+            tables.append(table)
+    return tables
+
+
+def count_rows_in_tables(tables: list):
+    results = []
+    with connections['default'].cursor() as cursor:
+        for table in tables:
+            try:
+                cursor.execute(f"SELECT COUNT(*) as count FROM {table}")
+                count = cursor.fetchone()[0]
+                results.append({'table': table, 'count': count})
+            except Exception as e:
+                results.append({'table': table, 'error': str(e)})
+    return results
+
+
+def format_count_response(counts: list, language: str = 'english', entity_type: str = None):
+    if not counts:
+        return "📭 No matching tables found." if language != 'arabic' else "📭 لم يتم العثور على جداول مطابقة."
+
+    # Helper to pick primary tables per entity for human-friendly reporting
+    def pick_primary(items, etype):
+        tbls = [i for i in items if 'count' in i]
+        if etype == 'book':
+            preferred = [
+                'library_books',
+                'library_encyclopedia_book',
+                'library_books_encyclopedia'
+            ]
+            # Filter out auxiliary tables (bookmarks/reviews/history/category additions etc.)
+            exclude_fragments = ['bookmark', 'history', 'review', 'reviews', 'category', 'addition', 'webapp', 'website', 'schedule']
+            primary = [i for i in tbls if (i['table'] in preferred)]
+            if not primary:
+                primary = [i for i in tbls if ('book' in i['table'].lower() or 'books' in i['table'].lower()) and not any(ex in i['table'].lower() for ex in exclude_fragments)]
+            return primary
+        elif etype == 'author':
+            preferred = ['library_authors']
+            return [i for i in tbls if i['table'] in preferred] or tbls[:3]
+        elif etype == 'article':
+            candidates = [i for i in tbls if 'article' in i['table'].lower()]
+            return candidates or tbls[:3]
+        elif etype == 'company':
+            candidates = [i for i in tbls if 'company' in i['table'].lower()]
+            return candidates or tbls[:3]
+        elif etype == 'webapp':
+            candidates = [i for i in tbls if 'webapp' in i['table'].lower()]
+            return candidates or tbls[:3]
+        elif etype == 'category':
+            candidates = [i for i in tbls if 'categor' in i['table'].lower()]
+            return candidates or tbls[:3]
+        return tbls[:5]
+
+    display = pick_primary(counts, entity_type)
+    total = sum(int(i['count']) for i in display if 'count' in i)
+
+    if language == 'arabic':
+        et = (entity_type or '').strip()
+        parts = []
+        if et == 'book':
+            parts.append(f"📚 لدينا حاليًا ما يقرب من {total} كتاب/كتب في قاعدة البيانات.")
+            parts.append("تفصيل الجداول الأساسية:")
+        else:
+            header_map = {
+                'author': 'المؤلفين',
+                'article': 'المقالات',
+                'company': 'الشركات',
+                'webapp': 'تطبيقات الويب',
+                'category': 'التصنيفات'
+            }
+            label = header_map.get(et, 'السجلات')
+            parts.append(f"📊 إجمالي {label} التقريبي: {total}")
+            parts.append("تفصيل الجداول الأساسية:")
+        for item in display:
+            parts.append(f" - {item['table']}: {item['count']}")
+        # Note about hidden auxiliary tables
+        if len(display) < len([i for i in counts if 'count' in i]):
+            parts.append("ℹ️ تم إخفاء الجداول المساعدة (المراجعات/المفضلات/السجل) للوضوح.")
+        return "\n".join(parts)
+    else:
+        et = (entity_type or '').strip()
+        parts = []
+        if et == 'book':
+            parts.append(f"📚 We currently have approximately {total} book(s) in the database.")
+            parts.append("Key source tables:")
+        else:
+            header_map = {
+                'author': 'author(s)',
+                'article': 'article(s)',
+                'company': 'company(ies)',
+                'webapp': 'web app(s)',
+                'category': 'category(ies)'
+            }
+            label = header_map.get(et, 'record(s)')
+            parts.append(f"📊 Approximate total {label}: {total}")
+            parts.append("Key source tables:")
+        for item in display:
+            parts.append(f" - {item['table']}: {item['count']}")
+        if len(display) < len([i for i in counts if 'count' in i]):
+            parts.append("ℹ️ Auxiliary tables (reviews/bookmarks/history) are hidden for clarity.")
+        return "\n".join(parts)
+
+# Text sanitization helpers
+
+def sanitize_text(val) -> str:
+    if val is None:
+        return ""
+    try:
+        s = html.unescape(str(val))
+        s = re.sub(r'<[^>]+>', ' ', s)
+        s = re.sub(r'\s+', ' ', s).strip()
+        return s
+    except Exception:
+        try:
+            return str(val)
+        except Exception:
+            return ""
+
+# SQL explanation helpers
+
+def extract_tables_from_sql(sql: str) -> List[str]:
+    if not sql:
+        return []
+    try:
+        pattern = re.compile(r"\bFROM\s+([\w\.]*)|\bJOIN\s+([\w\.]*)", re.IGNORECASE)
+        tables = []
+        for m in pattern.finditer(sql):
+            t = m.group(1) or m.group(2)
+            if t and t not in tables:
+                tables.append(t)
+        return tables
+    except Exception:
+        return []
+
+
+def build_explanation_note(sql: str, language: str) -> str:
+    tables = extract_tables_from_sql(sql)
+    if language == 'arabic':
+        if tables:
+            joined = ", ".join(tables)
+            return f"شرح: تم توليد SQL اعتمادًا على المخطط الحي لقاعدة البيانات واختيار الجداول الأنسب ({joined}). تم عرض الروابط للتنقل السريع."
+        else:
+            return "شرح: تم توليد SQL اعتمادًا على المخطط الحي لقاعدة البيانات. تم تضمين روابط مناسبة ضمن النتائج."
+    else:
+        if tables:
+            joined = ", ".join(tables)
+            return f"Explanation: The SQL was generated using the live DB schema and selected the most relevant tables ({joined}). Related links are included for quick navigation."
+        else:
+            return "Explanation: The SQL was generated using the live DB schema. Appropriate links are included in the results."
+
+
 def format_response_for_user(sql_result, query_language="english"):
     """Format SQL results into a user-friendly response with Arabic support"""
     if not sql_result.get("success"):
@@ -445,13 +736,13 @@ def format_book_results(results, language="english"):
 
             # Basic book info
             if 'title' in book and book['title']:
-                response += f"   📖 العنوان: {book['title']}\n"
+                response += f"   📖 العنوان: {sanitize_text(book['title'])}\n"
 
             # Author information
             if 'author_name' in book and book['author_name']:
-                response += f"   ✍️ المؤلف: {book['author_name']}\n"
+                response += f"   ✍️ المؤلف: {sanitize_text(book['author_name'])}\n"
             elif 'name' in book and book['name']:  # Direct author name
-                response += f"   ✍️ المؤلف: {book['name']}\n"
+                response += f"   ✍️ المؤلف: {sanitize_text(book['name'])}\n"
 
             # Publication details
             if 'isbn' in book and book['isbn']:
@@ -463,7 +754,7 @@ def format_book_results(results, language="english"):
 
             # Content details
             if 'description' in book and book['description']:
-                desc = str(book['description'])
+                desc = sanitize_text(book['description'])
                 if len(desc) > 150:
                     desc = desc[:147] + "..."
                 response += f"   📝 الوصف: {desc}\n"
@@ -499,13 +790,13 @@ def format_book_results(results, language="english"):
 
             # Basic book info
             if 'title' in book and book['title']:
-                response += f"   📖 Title: {book['title']}\n"
+                response += f"   📖 Title: {sanitize_text(book['title'])}\n"
 
             # Author information
             if 'author_name' in book and book['author_name']:
-                response += f"   ✍️ Author: {book['author_name']}\n"
+                response += f"   ✍️ Author: {sanitize_text(book['author_name'])}\n"
             elif 'name' in book and book['name']:  # Direct author name
-                response += f"   ✍️ Author: {book['name']}\n"
+                response += f"   ✍️ Author: {sanitize_text(book['name'])}\n"
 
             # Publication details
             if 'isbn' in book and book['isbn']:
@@ -517,7 +808,7 @@ def format_book_results(results, language="english"):
 
             # Content details
             if 'description' in book and book['description']:
-                desc = str(book['description'])
+                desc = sanitize_text(book['description'])
                 if len(desc) > 150:
                     desc = desc[:147] + "..."
                 response += f"   📝 Description: {desc}\n"
@@ -557,9 +848,9 @@ def format_author_results(results, language="english"):
             response += f"✍️ **المؤلف {i}:**\n"
 
             if 'name' in author and author['name']:
-                response += f"   الاسم: {author['name']}\n"
+                response += f"   الاسم: {sanitize_text(author['name'])}\n"
             if 'bio' in author and author['bio']:
-                response += f"   السيرة الذاتية: {author['bio']}\n"
+                response += f"   السيرة الذاتية: {sanitize_text(author['bio'])}\n"
             if 'created_at' in author:
                 response += f"   تاريخ الإضافة: {author['created_at']}\n"
 
@@ -578,9 +869,9 @@ def format_author_results(results, language="english"):
             response += f"✍️ **Author {i}:**\n"
 
             if 'name' in author and author['name']:
-                response += f"   Name: {author['name']}\n"
+                response += f"   Name: {sanitize_text(author['name'])}\n"
             if 'bio' in author and author['bio']:
-                response += f"   Biography: {author['bio']}\n"
+                response += f"   Biography: {sanitize_text(author['bio'])}\n"
             if 'created_at' in author:
                 response += f"   Added: {author['created_at']}\n"
 
@@ -604,11 +895,11 @@ def format_course_results(results, language="english"):
             response += f"🎓 **الدورة {i}:**\n"
 
             if 'title' in course and course['title']:
-                response += f"   العنوان: {course['title']}\n"
+                response += f"   العنوان: {sanitize_text(course['title'])}\n"
             if 'description' in course and course['description']:
-                response += f"   الوصف: {course['description']}\n"
+                response += f"   الوصف: {sanitize_text(course['description'])}\n"
             if 'instructor' in course and course['instructor']:
-                response += f"   المعلم: {course['instructor']}\n"
+                response += f"   المعلم: {sanitize_text(course['instructor'])}\n"
             if 'duration' in course and course['duration']:
                 response += f"   المدة: {course['duration']}\n"
             if 'level' in course and course['level']:
@@ -629,11 +920,11 @@ def format_course_results(results, language="english"):
             response += f"🎓 **Course {i}:**\n"
 
             if 'title' in course and course['title']:
-                response += f"   Title: {course['title']}\n"
+                response += f"   Title: {sanitize_text(course['title'])}\n"
             if 'description' in course and course['description']:
-                response += f"   Description: {course['description']}\n"
+                response += f"   Description: {sanitize_text(course['description'])}\n"
             if 'instructor' in course and course['instructor']:
-                response += f"   Instructor: {course['instructor']}\n"
+                response += f"   Instructor: {sanitize_text(course['instructor'])}\n"
             if 'duration' in course and course['duration']:
                 response += f"   Duration: {course['duration']}\n"
             if 'level' in course and course['level']:
@@ -669,7 +960,7 @@ def format_general_results(results, language="english"):
                         'updated_at': 'تاريخ التحديث'
                     }
                     field_name = field_translations.get(key, key.replace('_', ' '))
-                    response += f"   {field_name}: {value}\n"
+                    response += f"   {field_name}: {sanitize_text(value)}\n"
 
             # Add msarii link if available
             if 'msarii_link' in result:
@@ -683,7 +974,7 @@ def format_general_results(results, language="english"):
             response += f"📋 **Result {i}:**\n"
             for key, value in result.items():
                 if value is not None and key != 'msarii_link':
-                    response += f"   {key.replace('_', ' ').title()}: {value}\n"
+                    response += f"   {key.replace('_', ' ').title()}: {sanitize_text(value)}\n"
 
             # Add msarii link if available
             if 'msarii_link' in result:
@@ -740,14 +1031,32 @@ class SimpleQueryView(APIView):
             query_language = detect_language(question)
             print(f"[INFO] Detected language: {query_language}")
 
+            # COUNT mode (deterministic, no LLM)
+            if detect_count_intent(question):
+                schema = get_relevant_schema()
+                entity_type = infer_entity_type(question)
+                tables = get_tables_for_type(schema, entity_type) if entity_type else []
+                if not tables:
+                    tables = list(schema.keys())[:10] if schema else []
+                counts = count_rows_in_tables(tables)
+                formatted = format_count_response(counts, query_language, entity_type)
+                # Add explanatory note for count mode
+                note = "شرح: تم تحديد الجداول ذات الصلة من المخطط ثم حساب عدد الصفوف لكل جدول." if query_language == 'arabic' else "Explanation: Relevant tables were selected from the schema and row counts computed per table."
+                combined = formatted + "\n\n" + note
+                return Response({
+                "response": combined,
+                "success": True,
+                "mode": "count",
+                "tables_checked": tables
+                }, status=status.HTTP_200_OK)
+
             # Comprehensive SQL queries based on keywords that fetch all relevant fields
             if "book" in question.lower() or "كتاب" in question:
                 # Check if asking about specific book
                 if "encyclopedia of science" in question.lower() or "موسوعة العلوم" in question:
                     sql = """
                     SELECT eb.*,
-                           la.name as author_name, la.bio as author_bio, la.slug as author_slug,
-                           la.wikipedia as author_wikipedia, la.profession as author_profession
+                           la.name as author_name, la.bio as author_bio, la.slug as author_slug
                     FROM library_encyclopedia_book eb
                     LEFT JOIN library_authors la ON eb.author_id = la.id
                     WHERE eb.title LIKE '%Encyclopedia of Science%'
@@ -755,8 +1064,7 @@ class SimpleQueryView(APIView):
                 else:
                     sql = """
                     SELECT eb.*,
-                           la.name as author_name, la.bio as author_bio, la.slug as author_slug,
-                           la.wikipedia as author_wikipedia, la.profession as author_profession
+                           la.name as author_name, la.bio as author_bio, la.slug as author_slug
                     FROM library_encyclopedia_book eb
                     LEFT JOIN library_authors la ON eb.author_id = la.id
                     LIMIT 3
@@ -770,8 +1078,7 @@ class SimpleQueryView(APIView):
                 # Default: show books with full details
                 sql = """
                 SELECT eb.*,
-                       la.name as author_name, la.bio as author_bio, la.slug as author_slug,
-                       la.wikipedia as author_wikipedia, la.profession as author_profession
+                       la.name as author_name, la.bio as author_bio, la.slug as author_slug
                 FROM library_encyclopedia_book eb
                 LEFT JOIN library_authors la ON eb.author_id = la.id
                 LIMIT 2
@@ -834,14 +1141,29 @@ def simple_ai_query(request):
         query_language = detect_language(question)
         print(f"[INFO] Detected language: {query_language}")
 
+        # COUNT mode (deterministic, no LLM)
+        if detect_count_intent(question):
+            schema = get_relevant_schema()
+            entity_type = infer_entity_type(question)
+            tables = get_tables_for_type(schema, entity_type) if entity_type else []
+            if not tables:
+                tables = list(schema.keys())[:10] if schema else []
+            counts = count_rows_in_tables(tables)
+            formatted = format_count_response(counts, query_language, entity_type)
+            return JsonResponse({
+                "response": formatted,
+                "success": True,
+                "mode": "count",
+                "tables_checked": tables
+            })
+
         # Simple SQL query based on keywords
         if "book" in question.lower() or "كتاب" in question:
             # Check if asking about specific book
             if "encyclopedia of science" in question.lower() or "موسوعة العلوم" in question:
                 sql = """
                 SELECT eb.*,
-                       la.name as author_name, la.bio as author_bio, la.slug as author_slug,
-                       la.wikipedia as author_wikipedia, la.profession as author_profession
+                       la.name as author_name, la.bio as author_bio, la.slug as author_slug
                 FROM library_encyclopedia_book eb
                 LEFT JOIN library_authors la ON eb.author_id = la.id
                 WHERE eb.title LIKE '%Encyclopedia of Science%'
@@ -849,8 +1171,7 @@ def simple_ai_query(request):
             else:
                 sql = """
                 SELECT eb.*,
-                       la.name as author_name, la.bio as author_bio, la.slug as author_slug,
-                       la.wikipedia as author_wikipedia, la.profession as author_profession
+                       la.name as author_name, la.bio as author_bio, la.slug as author_slug
                 FROM library_encyclopedia_book eb
                 LEFT JOIN library_authors la ON eb.author_id = la.id
                 LIMIT 3
@@ -864,8 +1185,7 @@ def simple_ai_query(request):
             # Default: show books with full details
             sql = """
             SELECT eb.*,
-                   la.name as author_name, la.bio as author_bio, la.slug as author_slug,
-                   la.wikipedia as author_wikipedia, la.profession as author_profession
+                   la.name as author_name, la.bio as author_bio, la.slug as author_slug
             FROM library_encyclopedia_book eb
             LEFT JOIN library_authors la ON eb.author_id = la.id
             LIMIT 2
@@ -913,6 +1233,22 @@ class AIQueryView(APIView):
             query_language = detect_language(question)
             print(f"[INFO] Detected language: {query_language}")
 
+            # COUNT mode (deterministic, no LLM)
+            if detect_count_intent(question):
+                schema = get_relevant_schema()
+                entity_type = infer_entity_type(question)
+                tables = get_tables_for_type(schema, entity_type) if entity_type else []
+                if not tables:
+                    tables = list(schema.keys())[:10] if schema else []
+                counts = count_rows_in_tables(tables)
+                formatted = format_count_response(counts, query_language, entity_type)
+                return Response({
+                    "response": formatted,
+                    "success": True,
+                    "mode": "count",
+                    "tables_checked": tables
+                }, status=status.HTTP_200_OK)
+
             # Fetch schema and build enhanced prompt
             schema = get_relevant_schema()
             prompt_template = generate_enhanced_prompt(schema, question)
@@ -928,51 +1264,49 @@ class AIQueryView(APIView):
 
             # If AutoGen isn't ready, fall back to direct SQL path
             if not (AUTOGEN_AVAILABLE and GROQ_API_KEY):
-                # Simple heuristic-based SQL similar to SimpleQueryView
-                if "book" in question.lower() or "كتاب" in question:
-                    if "encyclopedia of science" in question.lower() or "موسوعة العلوم" in question:
-                        sql = """
-                        SELECT eb.*,
-                               la.name as author_name, la.bio as author_bio, la.slug as author_slug,
-                               la.wikipedia as author_wikipedia, la.profession as author_profession
-                        FROM library_encyclopedia_book eb
-                        LEFT JOIN library_authors la ON eb.author_id = la.id
-                        WHERE eb.title LIKE '%Encyclopedia of Science%'
-                        """
+                # Use dynamic schema-aware fallback for better accuracy
+                dynamic_sql = None
+                # Prefer pattern-based author detection (e.g., من هو ...)
+                if infer_entity_type_from_patterns(question) == 'author' or infer_entity_type(question) == 'author':
+                    dynamic_sql = build_dynamic_author_sql(schema, question)
+                elif ("book" in (question or "").lower()) or ("كتاب" in (question or "")):
+                    dynamic_sql = build_dynamic_book_sql(schema, question)
+                # Fallback heuristics if dynamic build not possible
+                if not dynamic_sql:
+                    if "book" in question.lower() or "كتاب" in question:
+                        if "encyclopedia of science" in question.lower() or "موسوعة العلوم" in question:
+                            dynamic_sql = (
+                                "SELECT eb.*, la.name as author_name, la.bio as author_bio, la.slug as author_slug "
+                                "FROM library_encyclopedia_book eb LEFT JOIN library_authors la ON eb.author_id = la.id "
+                                "WHERE eb.title LIKE '%Encyclopedia of Science%'"
+                            )
+                        else:
+                            dynamic_sql = (
+                                "SELECT eb.*, la.name as author_name, la.bio as author_bio, la.slug as author_slug "
+                                "FROM library_encyclopedia_book eb LEFT JOIN library_authors la ON eb.author_id = la.id "
+                                "LIMIT 3"
+                            )
+                    elif "author" in question.lower() or "مؤلف" in question:
+                        dynamic_sql = "SELECT * FROM library_authors LIMIT 5"
                     else:
-                        sql = """
-                        SELECT eb.*,
-                               la.name as author_name, la.bio as author_bio, la.slug as author_slug,
-                               la.wikipedia as author_wikipedia, la.profession as author_profession
-                        FROM library_encyclopedia_book eb
-                        LEFT JOIN library_authors la ON eb.author_id = la.id
-                        LIMIT 3
-                        """
-                elif "author" in question.lower() or "مؤلف" in question:
-                    if "Dr. Smith" in question or "smith" in question.lower():
-                        sql = "SELECT * FROM library_authors WHERE name LIKE '%Smith%'"
-                    else:
-                        sql = "SELECT * FROM library_authors LIMIT 3"
-                else:
-                    sql = """
-                    SELECT eb.*,
-                           la.name as author_name, la.bio as author_bio, la.slug as author_slug,
-                           la.wikipedia as author_wikipedia, la.profession as author_profession
-                    FROM library_encyclopedia_book eb
-                    LEFT JOIN library_authors la ON eb.author_id = la.id
-                    LIMIT 2
-                    """
+                        dynamic_sql = (
+                            "SELECT eb.*, la.name as author_name, la.bio as author_bio, la.slug as author_slug "
+                            "FROM library_encyclopedia_book eb LEFT JOIN library_authors la ON eb.author_id = la.id "
+                            "LIMIT 2"
+                        )
 
-                sql_result = execute_sql_directly(sql)
+                sql_result = execute_sql_directly(dynamic_sql)
                 formatted_response = format_response_for_user(sql_result, query_language)
+                explanation = build_explanation_note(dynamic_sql, query_language)
+                combined = formatted_response + "\n\n" + explanation if formatted_response else explanation
 
                 return Response({
-                    "response": formatted_response,
-                    "executed_sql": sql,
+                    "response": combined,
+                    "executed_sql": dynamic_sql,
                     "success": sql_result.get("success", False),
                     "result_count": sql_result.get("count", 0),
                     "language": query_language,
-                    "note": "AutoGen disabled; used fallback SQL path"
+                    "note": "AutoGen disabled; used schema-aware fallback"
                 }, status=status.HTTP_200_OK)
 
             # Start interaction when AutoGen is available
@@ -996,17 +1330,20 @@ class AIQueryView(APIView):
 
                 # Execute the SQL query directly
                 sql_result = execute_sql_directly(sql_query)
-
+                
                 # Format the response for the user with language support
                 formatted_response = format_response_for_user(sql_result, query_language)
-
+                # Append explanation note about SQL/tables used
+                explanation = build_explanation_note(sql_query, query_language)
+                combined = formatted_response + "\n\n" + explanation if formatted_response else explanation
+                
                 return Response({
-                    "response": formatted_response,
-                    "raw_sql_response": content,
-                    "executed_sql": sql_query,
-                    "success": True,
-                    "result_count": sql_result.get("count", 0),
-                    "language": query_language
+                "response": combined,
+                "raw_sql_response": content,
+                "executed_sql": sql_query,
+                "success": True,
+                "result_count": sql_result.get("count", 0),
+                "language": query_language
                 }, status=status.HTTP_200_OK)
             else:
                 # If no SQL found, check if there's an error in the content
