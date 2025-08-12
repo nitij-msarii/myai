@@ -2,7 +2,6 @@ from rest_framework.views import APIView
 from rest_framework.response import Response
 from rest_framework import status
 import json
-from autogen import ConversableAgent, UserProxyAgent
 from typing import Annotated, Dict, List
 from django.db import connections
 from .models import Author, Book, Course, User
@@ -11,6 +10,30 @@ from django.utils.decorators import method_decorator
 import os
 import re
 import urllib.parse
+
+# Make AutoGen optional; always have a safe dummy agent available
+class _DummyAgent:
+    def __init__(self, *args, **kwargs):
+        pass
+
+    def register_for_llm(self, *args, **kwargs):
+        def decorator(fn):
+            return fn
+        return decorator
+
+    def register_for_execution(self, *args, **kwargs):
+        def decorator(fn):
+            return fn
+        return decorator
+
+    def initiate_chat(self, *args, **kwargs):
+        raise RuntimeError("AutoGen is not available in this environment")
+
+try:
+    from autogen import ConversableAgent, UserProxyAgent
+    AUTOGEN_AVAILABLE = True
+except Exception:
+    AUTOGEN_AVAILABLE = False
 
 # Initialize Conversable Agents with better Groq model
 GROQ_API_KEY = os.getenv("GROQ_API_KEY")
@@ -21,7 +44,7 @@ llm_config = {
     "cache_seed": 48,
     "config_list": [{
         "model": "llama-3.1-70b-versatile",  # Better model for complex queries
-        "api_key": api_key,
+        "api_key": GROQ_API_KEY,
         "api_type": "groq",
         "base_url": "https://api.groq.com/openai/v1",
         "temperature": 0.1,  # Lower temperature for more consistent responses
@@ -30,10 +53,11 @@ llm_config = {
 }
 
 # Enhanced SQL Writer Agent with Arabic and English support
-sql_writer = ConversableAgent(
-    "sql_writer",
-    llm_config=llm_config,
-    system_message="""You are an expert multilingual database assistant specializing in Arabic and English queries. Your tasks:
+if AUTOGEN_AVAILABLE and GROQ_API_KEY:
+    sql_writer = ConversableAgent(
+        "sql_writer",
+        llm_config=llm_config,
+        system_message="""You are an expert multilingual database assistant specializing in Arabic and English queries. Your tasks:
 
 1. LANGUAGE DETECTION: Detect if the user query is in Arabic or English
 2. QUERY ANALYSIS: Understand what the user is asking for (books, authors, courses, etc.)
@@ -54,14 +78,18 @@ LINK GENERATION RULES:
 - Categories: https://msarii.com/categories/{arabic_category_slug}
 
 Always use execute_sql_api() function with proper reflection and SQL query."""
-)
+    )
 
-user_proxy = UserProxyAgent(
-    "user_proxy",
-    human_input_mode="NEVER",
-    max_consecutive_auto_reply=2,
-    code_execution_config=False
-)
+    user_proxy = UserProxyAgent(
+        "user_proxy",
+        human_input_mode="NEVER",
+        max_consecutive_auto_reply=2,
+        code_execution_config=False
+    )
+else:
+    # Fallback placeholders to avoid initialization errors when API key is missing
+    sql_writer = _DummyAgent()
+    user_proxy = _DummyAgent()
 
 # Helper functions for Arabic language support and link generation
 def detect_language(text):
@@ -201,9 +229,14 @@ def get_relevant_schema():
 
     with connections['default'].cursor() as cursor:
         try:
-            # Get all tables that actually exist in the database (MySQL compatible)
-            cursor.execute("SHOW TABLES;")
-            existing_tables = [row[0] for row in cursor.fetchall()]
+            # Get all tables depending on DB vendor
+            vendor = connections['default'].vendor
+            if vendor == 'sqlite':
+                cursor.execute("SELECT name FROM sqlite_master WHERE type='table';")
+                existing_tables = [row[0] for row in cursor.fetchall()]
+            else:
+                cursor.execute("SHOW TABLES;")
+                existing_tables = [row[0] for row in cursor.fetchall()]
 
             print(f"[DEBUG] Found tables: {existing_tables}")
 
@@ -223,11 +256,23 @@ def get_relevant_schema():
 
             for table in relevant_tables:
                 try:
-                    # Get table structure for MySQL
-                    cursor.execute(f"DESCRIBE {table};")
-                    columns = cursor.fetchall()
-                    # Include essential column info (MySQL format: Field, Type, Null, Key, Default, Extra)
-                    schema[table] = [{"name": col[0], "type": col[1], "null": col[2], "key": col[3]} for col in columns]
+                    # Get table structure depending on DB vendor
+                    vendor = connections['default'].vendor
+                    if vendor == 'sqlite':
+                        cursor.execute(f"PRAGMA table_info({table});")
+                        columns = cursor.fetchall()
+                        # SQLite columns: cid, name, type, notnull, dflt_value, pk
+                        schema[table] = [{
+                            "name": col[1],
+                            "type": col[2],
+                            "null": 'NO' if col[3] else 'YES',
+                            "key": 'PRI' if col[5] else ''
+                        } for col in columns]
+                    else:
+                        cursor.execute(f"DESCRIBE {table};")
+                        columns = cursor.fetchall()
+                        # MySQL: Field, Type, Null, Key, Default, Extra
+                        schema[table] = [{"name": col[0], "type": col[1], "null": col[2], "key": col[3]} for col in columns]
                 except Exception as e:
                     print(f"Error getting schema for {table}: {e}")
                     schema[table] = []
@@ -881,7 +926,56 @@ class AIQueryView(APIView):
                 if "content" in message:
                     captured_response["content"] = message["content"]
 
-            # Start interaction
+            # If AutoGen isn't ready, fall back to direct SQL path
+            if not (AUTOGEN_AVAILABLE and GROQ_API_KEY):
+                # Simple heuristic-based SQL similar to SimpleQueryView
+                if "book" in question.lower() or "كتاب" in question:
+                    if "encyclopedia of science" in question.lower() or "موسوعة العلوم" in question:
+                        sql = """
+                        SELECT eb.*,
+                               la.name as author_name, la.bio as author_bio, la.slug as author_slug,
+                               la.wikipedia as author_wikipedia, la.profession as author_profession
+                        FROM library_encyclopedia_book eb
+                        LEFT JOIN library_authors la ON eb.author_id = la.id
+                        WHERE eb.title LIKE '%Encyclopedia of Science%'
+                        """
+                    else:
+                        sql = """
+                        SELECT eb.*,
+                               la.name as author_name, la.bio as author_bio, la.slug as author_slug,
+                               la.wikipedia as author_wikipedia, la.profession as author_profession
+                        FROM library_encyclopedia_book eb
+                        LEFT JOIN library_authors la ON eb.author_id = la.id
+                        LIMIT 3
+                        """
+                elif "author" in question.lower() or "مؤلف" in question:
+                    if "Dr. Smith" in question or "smith" in question.lower():
+                        sql = "SELECT * FROM library_authors WHERE name LIKE '%Smith%'"
+                    else:
+                        sql = "SELECT * FROM library_authors LIMIT 3"
+                else:
+                    sql = """
+                    SELECT eb.*,
+                           la.name as author_name, la.bio as author_bio, la.slug as author_slug,
+                           la.wikipedia as author_wikipedia, la.profession as author_profession
+                    FROM library_encyclopedia_book eb
+                    LEFT JOIN library_authors la ON eb.author_id = la.id
+                    LIMIT 2
+                    """
+
+                sql_result = execute_sql_directly(sql)
+                formatted_response = format_response_for_user(sql_result, query_language)
+
+                return Response({
+                    "response": formatted_response,
+                    "executed_sql": sql,
+                    "success": sql_result.get("success", False),
+                    "result_count": sql_result.get("count", 0),
+                    "language": query_language,
+                    "note": "AutoGen disabled; used fallback SQL path"
+                }, status=status.HTTP_200_OK)
+
+            # Start interaction when AutoGen is available
             user_proxy.initiate_chat(sql_writer, message=prompt_template, callback=capture_callback)
 
             # Process the response
@@ -976,17 +1070,27 @@ class TestDatabaseView(APIView):
             results = {}
             
             with connections['default'].cursor() as cursor:
-                # Get all tables that actually exist (MySQL)
-                cursor.execute("SHOW TABLES;")
-                existing_tables = [row[0] for row in cursor.fetchall()]
+                # Get all tables depending on DB vendor
+                vendor = connections['default'].vendor
+                if vendor == 'sqlite':
+                    cursor.execute("SELECT name FROM sqlite_master WHERE type='table';")
+                    existing_tables = [row[0] for row in cursor.fetchall()]
+                else:
+                    cursor.execute("SHOW TABLES;")
+                    existing_tables = [row[0] for row in cursor.fetchall()]
                 
                 print(f"[DEBUG] Found tables: {existing_tables}")
                 
                 for table in existing_tables:
                     try:
-                        # Get table structure (MySQL)
-                        cursor.execute(f"DESCRIBE {table};")
-                        columns = cursor.fetchall()
+                        # Get table structure depending on DB vendor
+                        vendor = connections['default'].vendor
+                        if vendor == 'sqlite':
+                            cursor.execute(f"PRAGMA table_info({table});")
+                            columns = cursor.fetchall()
+                        else:
+                            cursor.execute(f"DESCRIBE {table};")
+                            columns = cursor.fetchall()
                         
                         # Get sample data (first 5 rows)
                         cursor.execute(f"SELECT * FROM {table} LIMIT 5;")
@@ -1003,8 +1107,14 @@ class TestDatabaseView(APIView):
                                 row_dict[column_names[i]] = value
                             formatted_data.append(row_dict)
                         
+                        # Map columns representation for response
+                        if vendor == 'sqlite':
+                            column_meta = [{"name": col[1], "type": col[2]} for col in columns]
+                        else:
+                            column_meta = [{"name": col[0], "type": col[1]} for col in columns]
+
                         results[table] = {
-                            "columns": [{"name": col[0], "type": col[1]} for col in columns],
+                            "columns": column_meta,
                             "sample_data": formatted_data,
                             "row_count": len(formatted_data)
                         }

@@ -12,40 +12,70 @@ class EnhancedAIAgent:
     
     def process_query(self, query):
         """Process Arabic query and return enhanced response"""
-        query = query.strip()
+        query = (query or '').strip()
         
-        # Determine query type based on keywords
-        if any(word in query for word in ['كتاب', 'مؤلف', 'مصنف']):
+        # Normalize Arabic punctuation/spaces
+        query = re.sub(r"[\u061F\u060C,.;!?]+", " ", query)
+        query = re.sub(r"\s+", " ", query).strip()
+
+        # Route based on intent keywords/patterns
+        # Books: كتاب/كتب or explicit request for a book
+        if re.search(r"\b(كتاب|كتب)\b", query):
+            # If it's "كتب <category>" route to category
+            if re.search(r"\bكتب\b", query) and not re.search(r"\bكتاب\b", query):
+                return self.handle_category_query(query)
             return self.handle_book_query(query)
-        elif any(word in query for word in ['مؤلف', 'كاتب', 'عالم']):
+        
+        # Authors: mentions of author or pattern "من هو <name>"
+        if re.search(r"\b(مؤلف|كاتب|عالم)\b", query) or re.search(r"^من\s+هو\s+", query):
             return self.handle_author_query(query)
-        elif any(word in query for word in ['فئة', 'تصنيف', 'نوع']):
+        
+        # Categories: explicit category terms
+        if re.search(r"\b(فئة|تصنيف|نوع)\b", query):
             return self.handle_category_query(query)
-        elif any(word in query for word in ['مقال', 'بحث']):
+        
+        # Articles (singular/plural)
+        if re.search(r"\b(مقال|مقالات|بحث)\b", query):
             return self.handle_article_query(query)
-        elif any(word in query for word in ['تطبيق', 'برنامج']):
+        
+        # Webapps (singular/plural)
+        if re.search(r"\b(تطبيق|تطبيقات|برنامج|برامج)\b", query):
             return self.handle_webapp_query(query)
-        elif any(word in query for word in ['شركة', 'مؤسسة']):
+        
+        # Companies (singular/plural)
+        if re.search(r"\b(شركة|شركات|مؤسسة)\b", query):
             return self.handle_company_query(query)
-        else:
-            return self.handle_general_query(query)
+        
+        return self.handle_general_query(query)
     
     def extract_arabic_text(self, query):
-        """Extract Arabic text from query for search"""
-        # Remove common Arabic prefixes
-        prefixes = ['عن', 'في', 'من', 'إلى', 'بخصوص', 'حول']
-        text = query
+        """Extract Arabic text from query for search: remove stopwords and intent words"""
+        text = (query or '')
         
-        for prefix in prefixes:
-            text = text.replace(prefix, '').strip()
-        
+        # Common fillers/stop words and intent markers to drop
+        stopwords = [
+            'عن','في','من','الى','إلى','بخصوص','حول','على','مع','هو','هي','هذا','هذه','ذلك','تلك',
+            'اريد','أريد','معلومات','رجاء','لو سمحت','من هو','من',
+            # intent/type tokens
+            'كتاب','كتب','مؤلف','كاتب','عالم','مقال','مقالات','بحث','تطبيق','تطبيقات','برنامج','برامج','شركة','شركات','مؤسسة',
+            'فئة','تصنيف','نوع'
+        ]
+        # Remove combined phrases first
+        for phrase in ['من هو']:
+            text = re.sub(rf"\b{re.escape(phrase)}\b", " ", text)
+        # Then single-token removals
+        for sw in stopwords:
+            text = re.sub(rf"\b{re.escape(sw)}\b", " ", text)
+        # Remove punctuation and extra spaces
+        text = re.sub(r"[\u061F\u060C,.;!?]+", " ", text)
+        text = re.sub(r"\s+", " ", text).strip()
         return text
     
     def handle_book_query(self, query):
         """Handle book-related queries"""
         search_text = self.extract_arabic_text(query)
         
-        # Search by book title
+        # Search by book title or partials
         books = EnhancedBook.objects.filter(
             Q(title_ar__icontains=search_text) |
             Q(title__icontains=search_text)
@@ -66,6 +96,15 @@ class EnhancedAIAgent:
             books = EnhancedBook.objects.filter(author=author)
             if books.exists():
                 return self.response_builder.build_author_response(author)
+        
+        # Try by category name (e.g., "كتب الفقه الإسلامي")
+        categories = Category.objects.filter(
+            Q(name_ar__icontains=search_text) |
+            Q(name__icontains=search_text)
+        )
+        if categories.exists():
+            category = categories.first()
+            return self.response_builder.build_category_response(category)
         
         return {
             'error': 'لم يتم العثور على الكتاب المطلوب',
@@ -271,6 +310,17 @@ class EnhancedAIAgent:
                 'type': 'book',
                 'title': book.title_ar,
                 'url': book.get_msarii_url()
+            })
+        
+        # Suggest similar categories
+        categories = Category.objects.filter(
+            name_ar__icontains=search_text[:3]
+        )[:3]
+        for cat in categories:
+            suggestions.append({
+                'type': 'category',
+                'name': cat.name_ar,
+                'url': f"https://msarii.com/categories/{cat.slug}"
             })
         
         return suggestions

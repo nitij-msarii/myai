@@ -1,6 +1,7 @@
 import re
 import unidecode
 from django.utils.text import slugify
+from .enhanced_models import EnhancedBook, Article
 
 class ArabicLinkGenerator:
     """Generate SEO-friendly Arabic URLs for msarii.com"""

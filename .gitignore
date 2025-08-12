@@ -1,2 +1,6 @@
+# Python venvs
 env
 venv
+
+# Local environment files (keep secrets out of git)
+.env

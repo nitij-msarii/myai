@@ -60,3 +60,12 @@ class User(models.Model):
     
     def __str__(self):
         return self.full_name
+
+# Ensure enhanced models are registered with Django's app registry for migrations
+# by importing them here.
+try:
+    from .enhanced_models import Category, EnhancedAuthor, EnhancedBook, Article, WebApp, Company  # noqa: F401
+except Exception:
+    # During initial migration generation, this import may fail if dependencies are missing.
+    # It's safe to ignore here because the enhanced models will be imported when available.
+    pass
