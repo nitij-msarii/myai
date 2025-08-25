@@ -1,0 +1,213 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>AI Database Query Interface</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            max-width: 1200px;
+            margin: 0 auto;
+            padding: 20px;
+            background-color: #f5f5f5;
+        }
+        .container {
+            background: white;
+            padding: 30px;
+            border-radius: 10px;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+        }
+        h1 {
+            color: #333;
+            text-align: center;
+            margin-bottom: 30px;
+        }
+        .form-group {
+            margin-bottom: 20px;
+        }
+        label {
+            display: block;
+            margin-bottom: 5px;
+            font-weight: bold;
+            color: #555;
+        }
+        textarea {
+            width: 100%;
+            height: 100px;
+            padding: 10px;
+            border: 2px solid #ddd;
+            border-radius: 5px;
+            font-size: 16px;
+            resize: vertical;
+        }
+        button {
+            background-color: #007bff;
+            color: white;
+            padding: 12px 30px;
+            border: none;
+            border-radius: 5px;
+            font-size: 16px;
+            cursor: pointer;
+            transition: background-color 0.3s;
+        }
+        button:hover {
+            background-color: #0056b3;
+        }
+        button:disabled {
+            background-color: #ccc;
+            cursor: not-allowed;
+        }
+        .response {
+            margin-top: 30px;
+            padding: 20px;
+            border-radius: 5px;
+            white-space: pre-wrap;
+            font-family: monospace;
+            font-size: 14px;
+        }
+        .success {
+            background-color: #d4edda;
+            border: 1px solid #c3e6cb;
+            color: #155724;
+        }
+        .error {
+            background-color: #f8d7da;
+            border: 1px solid #f5c6cb;
+            color: #721c24;
+        }
+        .loading {
+            text-align: center;
+            color: #666;
+            font-style: italic;
+        }
+        .example-queries {
+            margin-top: 20px;
+            padding: 15px;
+            background-color: #f8f9fa;
+            border-radius: 5px;
+        }
+        .example-queries h3 {
+            margin-top: 0;
+            color: #495057;
+        }
+        .example-queries ul {
+            margin: 0;
+            padding-left: 20px;
+        }
+        .example-queries li {
+            margin-bottom: 5px;
+            cursor: pointer;
+            color: #007bff;
+        }
+        .example-queries li:hover {
+            text-decoration: underline;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>🤖 AI Database Query Interface</h1>
+        
+        <form id="queryForm">
+            <div class="form-group">
+                <label for="question">Ask your question:</label>
+                <textarea id="question" name="question" placeholder="Enter your question here... For example: 'Show me all books by John Doe' or 'Find books about Python programming'"></textarea>
+            </div>
+            
+            <button type="submit" id="submitBtn">🔍 Query Database</button>
+        </form>
+        
+        <div class="example-queries">
+            <h3>💡 Example Queries:</h3>
+            <ul>
+                <li onclick="setQuery('Show me all books')">Show me all books</li>
+                <li onclick="setQuery('Find books by author John Smith')">Find books by author John Smith</li>
+                <li onclick="setQuery('Show me all workspaces')">Show me all workspaces</li>
+                <li onclick="setQuery('Find books about programming')">Find books about programming</li>
+                <li onclick="setQuery('Show me books with links')">Show me books with links</li>
+            </ul>
+        </div>
+        
+        <div id="response" style="display: none;"></div>
+    </div>
+
+    <script>
+        function setQuery(query) {
+            document.getElementById('question').value = query;
+        }
+        
+        document.getElementById('queryForm').addEventListener('submit', async function(e) {
+            e.preventDefault();
+            
+            const question = document.getElementById('question').value.trim();
+            if (!question) {
+                alert('Please enter a question');
+                return;
+            }
+            
+            const submitBtn = document.getElementById('submitBtn');
+            const responseDiv = document.getElementById('response');
+            
+            // Show loading state
+            submitBtn.disabled = true;
+            submitBtn.textContent = '⏳ Processing...';
+            responseDiv.style.display = 'block';
+            responseDiv.className = 'response loading';
+            responseDiv.textContent = 'Processing your query...';
+            
+            try {
+                const response = await fetch('/AI-agent/ai-query/', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                        'X-CSRFToken': getCookie('csrftoken')
+                    },
+                    body: JSON.stringify({ question: question })
+                });
+                
+                const data = await response.json();
+                
+                if (data.success) {
+                    responseDiv.className = 'response success';
+                    responseDiv.innerHTML = `
+<strong>✅ Query Results:</strong>
+
+${data.response}
+
+${data.executed_sql ? `<strong>Executed SQL:</strong>
+<code>${data.executed_sql}</code>
+
+` : ''}
+<strong>Result Count:</strong> ${data.result_count || 'N/A'}
+                    `;
+                } else {
+                    responseDiv.className = 'response error';
+                    responseDiv.textContent = `Error: ${data.error || 'Unknown error occurred'}`;
+                }
+            } catch (error) {
+                responseDiv.className = 'response error';
+                responseDiv.textContent = `Network Error: ${error.message}`;
+            } finally {
+                submitBtn.disabled = false;
+                submitBtn.textContent = '🔍 Query Database';
+            }
+        });
+        
+        function getCookie(name) {
+            let cookieValue = null;
+            if (document.cookie && document.cookie !== '') {
+                const cookies = document.cookie.split(';');
+                for (let i = 0; i < cookies.length; i++) {
+                    const cookie = cookies[i].trim();
+                    if (cookie.substring(0, name.length + 1) === (name + '=')) {
+                        cookieValue = decodeURIComponent(cookie.substring(name.length + 1));
+                        break;
+                    }
+                }
+            }
+            return cookieValue;
+        }
+    </script>
+</body>
+</html> 

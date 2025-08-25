@@ -1,0 +1,193 @@
+<!DOCTYPE html>
+<html lang="ar" dir="rtl">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>اختبار الوكيل الذكي - AI Agent Test</title>
+    <link href="https://cdn.jsdelivr.net/npm/tailwindcss@2.2.19/dist/tailwind.min.css" rel="stylesheet">
+    <style>
+        .chat-container {
+            max-height: 500px;
+            overflow-y: auto;
+        }
+        .message-user {
+            background-color: #3b82f6;
+            color: white;
+        }
+        .message-ai {
+            background-color: #f3f4f6;
+            color: #1f2937;
+        }
+        .loading {
+            display: none;
+        }
+        .loading.show {
+            display: block;
+        }
+    </style>
+</head>
+<body class="bg-gray-100 min-h-screen">
+    <div class="container mx-auto px-4 py-8">
+        <div class="max-w-4xl mx-auto">
+            <h1 class="text-3xl font-bold text-center mb-8 text-gray-800">
+                🤖 اختبار الوكيل الذكي - AI Agent Test
+            </h1>
+            
+            <!-- Chat Container -->
+            <div class="bg-white rounded-lg shadow-lg p-6 mb-6">
+                <div class="chat-container mb-4" id="chatContainer">
+                    <div class="text-center text-gray-500 py-8">
+                        ابدأ المحادثة بسؤال عن الكتب أو المؤلفين<br>
+                        Start the conversation by asking about books or authors
+                    </div>
+                </div>
+                
+                <!-- Loading indicator -->
+                <div class="loading text-center py-4" id="loading">
+                    <div class="inline-flex items-center">
+                        <div class="animate-spin rounded-full h-6 w-6 border-b-2 border-blue-500"></div>
+                        <span class="ml-2">جاري المعالجة... Processing...</span>
+                    </div>
+                </div>
+                
+                <!-- Input Form -->
+                <form id="queryForm" class="flex gap-2">
+                    <input 
+                        type="text" 
+                        id="queryInput" 
+                        placeholder="اكتب سؤالك هنا... Type your question here..."
+                        class="flex-1 px-4 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
+                        required
+                    >
+                    <button 
+                        type="submit"
+                        class="px-6 py-2 bg-blue-500 text-white rounded-lg hover:bg-blue-600 focus:outline-none focus:ring-2 focus:ring-blue-500"
+                    >
+                        إرسال Send
+                    </button>
+                </form>
+            </div>
+            
+            <!-- Sample Queries -->
+            <div class="bg-white rounded-lg shadow-lg p-6">
+                <h2 class="text-xl font-bold mb-4">أسئلة تجريبية - Sample Queries:</h2>
+                <div class="grid grid-cols-1 md:grid-cols-2 gap-2">
+                    <button class="sample-query text-left p-3 bg-gray-50 rounded hover:bg-gray-100" data-query="هل يوجد كتاب أولاد حارتنا في قاعدة البيانات؟">
+                        هل يوجد كتاب أولاد حارتنا في قاعدة البيانات؟
+                    </button>
+                    <button class="sample-query text-left p-3 bg-gray-50 rounded hover:bg-gray-100" data-query="من هو نجيب محفوظ؟">
+                        من هو نجيب محفوظ؟
+                    </button>
+                    <button class="sample-query text-left p-3 bg-gray-50 rounded hover:bg-gray-100" data-query="ما هي الكتب المتوفرة؟">
+                        ما هي الكتب المتوفرة؟
+                    </button>
+                    <button class="sample-query text-left p-3 bg-gray-50 rounded hover:bg-gray-100" data-query="أريد معلومات عن المؤلفين">
+                        أريد معلومات عن المؤلفين
+                    </button>
+                    <button class="sample-query text-left p-3 bg-gray-50 rounded hover:bg-gray-100" data-query="What books are available?">
+                        What books are available?
+                    </button>
+                    <button class="sample-query text-left p-3 bg-gray-50 rounded hover:bg-gray-100" data-query="Tell me about the authors">
+                        Tell me about the authors
+                    </button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        const chatContainer = document.getElementById('chatContainer');
+        const queryForm = document.getElementById('queryForm');
+        const queryInput = document.getElementById('queryInput');
+        const loading = document.getElementById('loading');
+        
+        // Handle form submission
+        queryForm.addEventListener('submit', async (e) => {
+            e.preventDefault();
+            const query = queryInput.value.trim();
+            if (!query) return;
+            
+            // Add user message
+            addMessage(query, 'user');
+            queryInput.value = '';
+            
+            // Show loading
+            loading.classList.add('show');
+            
+            try {
+                const response = await fetch('/ai/query/', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                        'X-CSRFToken': getCookie('csrftoken')
+                    },
+                    body: JSON.stringify({ question: query })
+                });
+                
+                const data = await response.json();
+                
+                // Add AI response
+                addMessage(data.response || 'No response received', 'ai', data);
+                
+            } catch (error) {
+                addMessage('خطأ في الاتصال - Connection error: ' + error.message, 'ai');
+            } finally {
+                loading.classList.remove('show');
+            }
+        });
+        
+        // Handle sample query clicks
+        document.querySelectorAll('.sample-query').forEach(button => {
+            button.addEventListener('click', () => {
+                queryInput.value = button.dataset.query;
+                queryForm.dispatchEvent(new Event('submit'));
+            });
+        });
+        
+        function addMessage(content, type, metadata = {}) {
+            const messageDiv = document.createElement('div');
+            messageDiv.className = `mb-4 p-4 rounded-lg ${type === 'user' ? 'message-user ml-12' : 'message-ai mr-12'}`;
+            
+            let messageContent = `<div class="whitespace-pre-wrap">${content}</div>`;
+            
+            if (type === 'ai' && metadata) {
+                messageContent += `
+                    <div class="mt-2 pt-2 border-t border-gray-300 text-xs opacity-75">
+                        Language: ${metadata.language || 'unknown'} | 
+                        Success: ${metadata.success ? 'Yes' : 'No'} | 
+                        Results: ${metadata.result_count || 0}
+                        ${metadata.executed_sql ? `<br>SQL: ${metadata.executed_sql}` : ''}
+                    </div>
+                `;
+            }
+            
+            messageDiv.innerHTML = messageContent;
+            chatContainer.appendChild(messageDiv);
+            
+            // Remove initial message if exists
+            const initialMessage = chatContainer.querySelector('.text-center.text-gray-500');
+            if (initialMessage) {
+                initialMessage.remove();
+            }
+            
+            // Scroll to bottom
+            chatContainer.scrollTop = chatContainer.scrollHeight;
+        }
+        
+        function getCookie(name) {
+            let cookieValue = null;
+            if (document.cookie && document.cookie !== '') {
+                const cookies = document.cookie.split(';');
+                for (let i = 0; i < cookies.length; i++) {
+                    const cookie = cookies[i].trim();
+                    if (cookie.substring(0, name.length + 1) === (name + '=')) {
+                        cookieValue = decodeURIComponent(cookie.substring(name.length + 1));
+                        break;
+                    }
+                }
+            }
+            return cookieValue;
+        }
+    </script>
+</body>
+</html>
